@@ -112,6 +112,7 @@ class MatterBridge(
             call.argument<String>("setupCode") ?: "",
             call.argument<String>("ssid") ?: "",
             call.argument<String>("password") ?: "",
+            call.argument<Boolean>("onNetworkOnly") == true,
             result,
           )
         "continueCommissioning" -> {
@@ -163,7 +164,13 @@ class MatterBridge(
     else parser.parseManualPairingCode(c.replace("-", "").replace(" ", ""))
   }
 
-  private fun commission(code: String, ssid: String, password: String, result: MethodChannel.Result) {
+  private fun commission(
+    code: String,
+    ssid: String,
+    password: String,
+    onNetworkOnly: Boolean,
+    result: MethodChannel.Result
+  ) {
     if (pendingCommission != null) {
       result.error("busy", "Pairing is already in progress.", null)
       return
@@ -175,7 +182,7 @@ class MatterBridge(
         result.error("invalid_code", "The setup code is not valid. Check the Matter sticker.", null)
         return
       }
-    if (ssid.isBlank()) {
+    if (ssid.isBlank() && !onNetworkOnly) {
       result.error("no_wifi", "Enter the name of your 2.4 GHz Wi-Fi network.", null)
       return
     }
@@ -185,6 +192,21 @@ class MatterBridge(
     } catch (e: Throwable) {
       DebugReport.log("ERROR starting Matter controller: ${Log.getStackTraceString(e)}")
       result.error("matter_init", "The Matter system in this app could not start: ${e.message}", null)
+      return
+    }
+    if (onNetworkOnly) {
+      // The AC is already on Wi-Fi (set up by another app, e.g. MirAIe "Share
+      // Device"). Commission over the network only, like MirAIe does.
+      pendingCommission = result
+      stage("Searching for the AC on your Wi-Fi network…")
+      onNetworkFallbackMessage = "skipped (code from another app)"
+      guarded("pairDeviceWithCode (on-network)") {
+        val nodeId = prepareCommissioning()
+        controller.pairDeviceWithCode(
+          nodeId, code.trim().replace(" ", ""), false, true, CommissionParameters.Builder().build()
+        )
+        main.postDelayed(onNetworkTimeout, ON_NETWORK_TIMEOUT_MS)
+      }
       return
     }
     permissions.requestBluetooth { granted ->
@@ -650,7 +672,8 @@ class MatterBridge(
     private const val KEY_LABEL = "label"
     private const val KEY_NEXT_NODE = "next_node_id"
     private const val SCAN_TIMEOUT_MS = 30_000L
-    private const val ON_NETWORK_TIMEOUT_MS = 120_000L
+    // MirAIe opens its "Share Device" window for 180 s.
+    private const val ON_NETWORK_TIMEOUT_MS = 150_000L
     private const val ATTESTATION_FAILSAFE_SECS = 600
     private const val SUB_MIN_INTERVAL_S = 0
     private const val SUB_MAX_INTERVAL_S = 60

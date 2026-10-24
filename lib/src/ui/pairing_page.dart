@@ -18,6 +18,9 @@ class _PairingPageState extends State<PairingPage> {
   final _password = TextEditingController();
   bool _busy = false;
   bool _showPassword = false;
+
+  /// The AC is already on Wi-Fi and the code comes from MirAIe "Share Device".
+  bool _shared = true;
   String? _error;
   bool _dialogOpen = false;
 
@@ -51,8 +54,14 @@ class _PairingPageState extends State<PairingPage> {
           'Continue only if this is your own Panasonic AC, the one with the sticker you scanned.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Continue')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Continue'),
+          ),
         ],
       ),
     );
@@ -70,6 +79,7 @@ class _PairingPageState extends State<PairingPage> {
         setupCode: _code.text,
         wifiSsid: _ssid.text.trim(),
         wifiPassword: _password.text,
+        onNetworkOnly: _shared,
       );
     } on BackendException catch (e) {
       setState(() => _error = e.message);
@@ -87,11 +97,22 @@ class _PairingPageState extends State<PairingPage> {
       children: [
         Text('Pair your AC', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 8),
-        const Text(
-          '1. Put the AC in setup mode: press and hold the SMART button on the AC remote '
-          'for 5 seconds. The AC display shows a blinking Wi-Fi icon and "SE".\n'
-          '2. Stand near the AC with Bluetooth on, and keep this phone on the same Wi-Fi.\n'
-          '3. Enter the 11-digit number printed under the Matter QR code on the indoor unit.',
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: _shared,
+          onChanged: _busy ? null : (v) => setState(() => _shared = v),
+          title: const Text('AC is already set up in MirAIe'),
+          subtitle: const Text('Use the code from MirAIe "Share Device"'),
+        ),
+        Text(
+          _shared
+              ? '1. In MirAIe, open the AC settings and tap "Share Device".\n'
+                    '2. Enter the 11-digit code it shows, then tap Pair AC within 3 minutes.\n'
+                    '3. Keep this phone on the same Wi-Fi as the AC.'
+              : '1. Put the AC in setup mode: press and hold the SMART button on the AC remote '
+                    'for 5 seconds. The AC display shows a blinking Wi-Fi icon and "SE".\n'
+                    '2. Stand near the AC with Bluetooth on, and keep this phone on the same Wi-Fi.\n'
+                    '3. Enter the 11-digit number printed under the Matter QR code on the indoor unit.',
         ),
         const SizedBox(height: 16),
         TextField(
@@ -104,31 +125,35 @@ class _PairingPageState extends State<PairingPage> {
             border: OutlineInputBorder(),
           ),
         ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _ssid,
-          enabled: !_busy,
-          decoration: const InputDecoration(
-            labelText: 'Wi-Fi name (2.4 GHz)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _password,
-          enabled: !_busy,
-          obscureText: !_showPassword,
-          decoration: InputDecoration(
-            labelText: 'Wi-Fi password',
-            helperText: 'Sent only to the AC. Not saved by this app.',
-            border: const OutlineInputBorder(),
-            suffixIcon: IconButton(
-              tooltip: _showPassword ? 'Hide password' : 'Show password',
-              icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility),
-              onPressed: () => setState(() => _showPassword = !_showPassword),
+        if (!_shared) ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: _ssid,
+            enabled: !_busy,
+            decoration: const InputDecoration(
+              labelText: 'Wi-Fi name (2.4 GHz)',
+              border: OutlineInputBorder(),
             ),
           ),
-        ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _password,
+            enabled: !_busy,
+            obscureText: !_showPassword,
+            decoration: InputDecoration(
+              labelText: 'Wi-Fi password',
+              helperText: 'Sent only to the AC. Not saved by this app.',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                tooltip: _showPassword ? 'Hide password' : 'Show password',
+                icon: Icon(
+                  _showPassword ? Icons.visibility_off : Icons.visibility,
+                ),
+                onPressed: () => setState(() => _showPassword = !_showPassword),
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         FilledButton.icon(
           onPressed: _busy ? null : _pair,
@@ -147,8 +172,12 @@ class _PairingPageState extends State<PairingPage> {
             color: Theme.of(context).colorScheme.errorContainer,
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Text(_error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer)),
+              child: Text(
+                _error!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
+              ),
             ),
           ),
         ],

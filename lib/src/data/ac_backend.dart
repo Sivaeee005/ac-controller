@@ -74,10 +74,13 @@ abstract interface class AcBackend {
   ///
   /// [setupCode] is the QR text (`MT:...`) or the 11-digit manual code.
   /// The credentials are passed to the AC only and are not stored.
+  /// With [onNetworkOnly] the AC is already on Wi-Fi (for example shared
+  /// from MirAIe with "Share Device"): no Bluetooth, no credentials.
   Future<PairedAc> commission({
     required String setupCode,
     required String wifiSsid,
     required String wifiPassword,
+    bool onNetworkOnly = false,
   });
 
   /// Answer to an [AttestationFailedEvent].

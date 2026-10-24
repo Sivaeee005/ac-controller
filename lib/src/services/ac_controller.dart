@@ -96,12 +96,16 @@ class AcController extends ChangeNotifier {
     required String setupCode,
     required String wifiSsid,
     required String wifiPassword,
+    bool onNetworkOnly = false,
   }) async {
     _commissioningStage = 'Starting';
     notifyListeners();
     try {
       _paired = await backend.commission(
-          setupCode: setupCode, wifiSsid: wifiSsid, wifiPassword: wifiPassword);
+          setupCode: setupCode,
+          wifiSsid: wifiSsid,
+          wifiPassword: wifiPassword,
+          onNetworkOnly: onNetworkOnly);
     } finally {
       _commissioningStage = null;
       _attestationError = null;

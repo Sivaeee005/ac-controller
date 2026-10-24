@@ -57,8 +57,9 @@ class SimulatedBackend implements AcBackend {
     required String setupCode,
     required String wifiSsid,
     required String wifiPassword,
+    bool onNetworkOnly = false,
   }) async {
-    for (final stage in ['Scanning Bluetooth', 'Connecting', 'Sending Wi-Fi', 'Finishing']) {
+    for (final stage in [if (onNetworkOnly) 'Searching Wi-Fi network' else 'Scanning Bluetooth', 'Connecting', 'Sending Wi-Fi', 'Finishing']) {
       _events.add(CommissioningStageEvent(stage));
       await Future<void>.delayed(latency);
     }

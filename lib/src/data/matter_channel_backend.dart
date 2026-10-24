@@ -57,11 +57,13 @@ class MatterChannelBackend implements AcBackend {
     required String setupCode,
     required String wifiSsid,
     required String wifiPassword,
+    bool onNetworkOnly = false,
   }) async {
     final map = await _call<Map<Object?, Object?>>('commission', {
       'setupCode': setupCode,
       'ssid': wifiSsid,
       'password': wifiPassword,
+      'onNetworkOnly': onNetworkOnly,
     });
     if (map == null) throw const BackendException('no_result', 'Pairing returned no device.');
     return PairedAc.fromMap(map);

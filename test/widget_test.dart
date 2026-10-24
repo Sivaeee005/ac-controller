@@ -66,8 +66,23 @@ void main() {
     final c = AcController(SimulatedBackend(latency: Duration.zero));
     await tester.runAsync(c.start);
     await tester.pumpWidget(AcApp(controller: c));
+    // Default mode (code from MirAIe "Share Device") needs no Wi-Fi details.
+    expect(find.widgetWithText(TextField, 'Wi-Fi password'), findsNothing);
+    await tester.tap(find.byType(Switch));
+    await tester.pump();
     final field = tester.widget<TextField>(find.widgetWithText(TextField, 'Wi-Fi password'));
     expect(field.obscureText, isTrue);
+  });
+
+  testWidgets('shared-code pairing works without Wi-Fi details', (tester) async {
+    late final AcController c;
+    await tester.runAsync(() async {
+      c = AcController(SimulatedBackend(latency: const Duration(milliseconds: 5)));
+      await c.start();
+      await c.pair(setupCode: 'MT:TEST', wifiSsid: '', wifiPassword: '', onNetworkOnly: true);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    expect(c.pairedAc, isNotNull);
   });
 
   testWidgets('debug report opens from the app bar', (tester) async {

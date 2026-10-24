@@ -191,12 +191,18 @@ class MatterBridge(
       ble = connector
       pendingCommission = result
       stage("Searching for the AC over Bluetooth")
-      connector.scan(payload.discriminator, payload.hasShortDiscriminator, SCAN_TIMEOUT_MS) { device ->
+      // The manual (11-digit) code carries only the 4-bit short discriminator;
+      // the scan filter needs it in the 12-bit position (same as CHIPTool).
+      val discriminator = payload.getLongDiscriminatorValue()
+      connector.scan(discriminator, payload.hasShortDiscriminator, SCAN_TIMEOUT_MS) { device ->
         if (device == null) {
+          // Setup-mode instruction from Panasonic's MirAIe app
+          // (string matter_onboarding_ac_press_smart_btn_subdesc).
           failCommission(
             "not_found",
-            "The AC was not found over Bluetooth. Stand near the AC. If it was paired before, " +
-              "reset its Wi-Fi/Matter pairing (see the AC manual) and try again.",
+            "The AC was not found over Bluetooth. Put the AC in setup mode: hold the SMART " +
+              "button on the AC remote for 5 seconds until the AC display shows a blinking " +
+              "Wi-Fi icon and \"SE\". Then tap Pair AC again within a few minutes, near the AC.",
           )
           return@scan
         }
@@ -525,7 +531,7 @@ class MatterBridge(
     private const val KEY_NODE = "node_id"
     private const val KEY_LABEL = "label"
     private const val KEY_NEXT_NODE = "next_node_id"
-    private const val SCAN_TIMEOUT_MS = 20_000L
+    private const val SCAN_TIMEOUT_MS = 30_000L
     private const val ATTESTATION_FAILSAFE_SECS = 600
     private const val SUB_MIN_INTERVAL_S = 0
     private const val SUB_MAX_INTERVAL_S = 60

@@ -10,8 +10,9 @@ There are two kinds of results. Never mix them up.
 ## Stage 1 — real AC checklist
 
 Before you start:
-- The AC is powered (breaker ON) and its Wi-Fi/Matter module is in pairing
-  mode. A new AC is in pairing mode; see the AC manual if it was paired before.
+- The AC is powered (breaker ON) and in **setup mode**: hold the **SMART**
+  button on the AC remote for 5 seconds until the AC display shows a blinking
+  Wi-Fi icon and "SE". This is Panasonic's instruction, taken from the MirAIe app.
 - Your phone is on the **2.4 GHz** home Wi-Fi, with Bluetooth ON.
 - You have the 11-digit code from the Matter sticker. Do not share it.
 
@@ -35,6 +36,12 @@ If something fails, send the step number, the exact message on screen and a
 screenshot. If you can, also capture a log: on a PC with ADB, run
 `adb logcat -s MatterBridge BleConnector PaaTrustStore chip.*`. Check the log
 for Wi-Fi details before sharing it.
+
+## Stage 1 — real AC results
+
+| Date | Build | Step | Result | Notes |
+|---|---|---|---|---|
+| 2026-10-24 | run 40095973855 | 1 Pairing | **Fail** | "AC was not found over Bluetooth". Cause found in the app: the BLE scan used the short discriminator from the manual code without converting it to the 12-bit form, so it could never match. Fixed in the next build; the AC must also be in setup mode (SMART button, 5 s). |
 
 ## Stage 1 — simulated results
 

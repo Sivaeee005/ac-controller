@@ -88,8 +88,10 @@ class _PairingPageState extends State<PairingPage> {
         Text('Pair your AC', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 8),
         const Text(
-          'Stand near the AC with Bluetooth on. Use the 11-digit number printed under the '
-          'Matter QR code on the indoor unit. Your phone must be on the same Wi-Fi network.',
+          '1. Put the AC in setup mode: press and hold the SMART button on the AC remote '
+          'for 5 seconds. The AC display shows a blinking Wi-Fi icon and "SE".\n'
+          '2. Stand near the AC with Bluetooth on, and keep this phone on the same Wi-Fi.\n'
+          '3. Enter the 11-digit number printed under the Matter QR code on the indoor unit.',
         ),
         const SizedBox(height: 16),
         TextField(

@@ -42,6 +42,7 @@ for Wi-Fi details before sharing it.
 | Date | Build | Step | Result | Notes |
 |---|---|---|---|---|
 | 2026-10-24 | run 40095973855 | 1 Pairing | **Fail** | "AC was not found over Bluetooth". Cause found in the app: the BLE scan used the short discriminator from the manual code without converting it to the 12-bit form, so it could never match. Fixed in the next build; the AC must also be in setup mode (SMART button, 5 s). |
+| 2026-10-24 | run 40099643391 | 1 Pairing | **Fail** | Same message. The AC display showed "SE" + blinking Wi-Fi (setup mode confirmed). REA/JADX check of MirAIe: in "SE" mode MirAIe scans for Panasonic's proprietary BLE advert (manufacturer data), then commissions Matter **on-network** (`pairDeviceWithCode(..., useOnlyOnNetworkDiscovery = true)`). Next build: BLE scan without hardware filter plus diagnostics, then on-network Matter pairing as a fallback. |
 
 ## Stage 1 — simulated results
 

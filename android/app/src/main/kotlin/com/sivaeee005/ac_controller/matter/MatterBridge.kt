@@ -192,18 +192,35 @@ class MatterBridge(
       pendingCommission = result
       stage("Searching for the AC over Bluetooth")
       // The manual (11-digit) code carries only the 4-bit short discriminator;
-      // the scan filter needs it in the 12-bit position (same as CHIPTool).
+      // matching needs it in the 12-bit position (same as CHIPTool).
       val discriminator = payload.getLongDiscriminatorValue()
-      connector.scan(discriminator, payload.hasShortDiscriminator, SCAN_TIMEOUT_MS) { device ->
+      connector.scan(
+        discriminator,
+        payload.hasShortDiscriminator,
+        SCAN_TIMEOUT_MS,
+        onProgress = { devices, matter ->
+          stage("Searching over Bluetooth… devices seen: $devices, Matter devices: $matter")
+        },
+      ) { report ->
+        val device = report.device
+        val params =
+          CommissionParameters.Builder()
+            .setNetworkCredentials(
+              NetworkCredentials.forWiFi(NetworkCredentials.WiFiCredentials(ssid, password))
+            )
+            .build()
         if (device == null) {
-          // Setup-mode instruction from Panasonic's MirAIe app
-          // (string matter_onboarding_ac_press_smart_btn_subdesc).
-          failCommission(
-            "not_found",
-            "The AC was not found over Bluetooth. Put the AC in setup mode: hold the SMART " +
-              "button on the AC remote for 5 seconds until the AC display shows a blinking " +
-              "Wi-Fi icon and \"SE\". Then tap Pair AC again within a few minutes, near the AC.",
-          )
+          // Panasonic's MirAIe app commissions Panasonic Matter ACs with
+          // on-network discovery (pairDeviceWithCode, useOnlyOnNetworkDiscovery
+          // = true). Try the same when no Matter BLE advertisement matched.
+          connector.close()
+          ble = null
+          val bleSummary = notFoundMessage(report, discriminator, payload.hasShortDiscriminator)
+          stage("Not found over Bluetooth. Searching for the AC on your Wi-Fi network…")
+          val nodeId = prepareCommissioning()
+          onNetworkFallbackMessage = bleSummary
+          controller.pairDeviceWithCode(nodeId, code.trim().replace(" ", ""), false, true, params)
+          main.postDelayed(onNetworkTimeout, ON_NETWORK_TIMEOUT_MS)
           return@scan
         }
         stage("Connecting to the AC")
@@ -213,33 +230,85 @@ class MatterBridge(
             return@connect
           }
           stage("Sending Wi-Fi details and certificates")
-          val nodeId = prefs.getLong(KEY_NEXT_NODE, 1L)
-          prefs.edit().putLong(KEY_NEXT_NODE, nodeId + 1).apply()
-          controller.setCompletionListener(CommissionListener(nodeId))
-          controller.setDeviceAttestationDelegate(ATTESTATION_FAILSAFE_SECS) { devicePtr, _, errorCode ->
-            if (errorCode == 0L) {
-              controller.continueCommissioning(devicePtr, true)
-            } else {
-              // Let the user decide; see AttestationFailedEvent in Dart.
-              attestationDevicePtr = devicePtr
-              emit(mapOf("type" to "attestationFailed", "errorCode" to errorCode))
-            }
-          }
-          val params =
-            CommissionParameters.Builder()
-              .setNetworkCredentials(
-                NetworkCredentials.forWiFi(NetworkCredentials.WiFiCredentials(ssid, password))
-              )
-              .build()
+          val nodeId = prepareCommissioning()
           controller.pairDevice(gatt, connector.connectionId, nodeId, payload.setupPinCode, params)
         }
       }
     }
   }
 
+  /** Message from the BLE step, shown if on-network pairing also fails. */
+  private var onNetworkFallbackMessage: String? = null
+
+  private val onNetworkTimeout = Runnable {
+    if (pendingCommission != null && onNetworkFallbackMessage != null) {
+      try {
+        controller.stopDevicePairing(prefs.getLong(KEY_NEXT_NODE, 2L) - 1)
+      } catch (e: Exception) {
+        Log.w(TAG, "stopDevicePairing", e)
+      }
+      failCommission(
+        "not_found",
+        "Bluetooth: ${onNetworkFallbackMessage}\n\nWi-Fi network: the AC was not found on your " +
+          "Wi-Fi network either (it is not on Wi-Fi yet, or it is not open for Matter pairing).",
+      )
+    }
+  }
+
+  /** Allocates a node ID and installs the pairing listener and attestation delegate. */
+  private fun prepareCommissioning(): Long {
+    val nodeId = prefs.getLong(KEY_NEXT_NODE, 1L)
+    prefs.edit().putLong(KEY_NEXT_NODE, nodeId + 1).apply()
+    controller.setCompletionListener(CommissionListener(nodeId))
+    controller.setDeviceAttestationDelegate(ATTESTATION_FAILSAFE_SECS) { devicePtr, _, errorCode ->
+      if (errorCode == 0L) {
+        controller.continueCommissioning(devicePtr, true)
+      } else {
+        // Let the user decide; see AttestationFailedEvent in Dart.
+        attestationDevicePtr = devicePtr
+        emit(mapOf("type" to "attestationFailed", "errorCode" to errorCode))
+      }
+    }
+    return nodeId
+  }
+
   private fun stage(text: String) = emit(mapOf("type" to "stage", "stage" to text))
 
+  /** Explains why the scan did not find the AC, from what it actually saw. */
+  private fun notFoundMessage(
+    report: BleConnector.ScanReport,
+    discriminator: Int,
+    isShort: Boolean
+  ): String {
+    // Setup-mode instruction from Panasonic's MirAIe app
+    // (string matter_onboarding_ac_press_smart_btn_subdesc).
+    val setupMode =
+      "Put the AC in setup mode: hold the SMART button on the AC remote for 5 seconds " +
+        "until the display shows a blinking Wi-Fi icon and \"SE\", then tap Pair AC again."
+    val expected =
+      if (isShort) "short ID ${discriminator shr 8}" else "ID $discriminator"
+    return when {
+      report.scanError != null ->
+        "Bluetooth scan could not start (error ${report.scanError}). Turn Bluetooth off and on, then try again."
+      report.devicesSeen == 0 ->
+        "The phone's Bluetooth scan saw no devices at all. Allow \"Nearby devices\" for this app " +
+          "(Settings > Apps > AC Controller > Permissions) and turn on Location, then try again."
+      report.matterAdverts.isEmpty() ->
+        "Bluetooth works (${report.devicesSeen} devices seen) but no device is offering Matter setup. " +
+          "The AC is not in setup mode. $setupMode"
+      else ->
+        "Found Matter device(s) " +
+          report.matterAdverts.joinToString { a ->
+            "[ID ${a.discriminator} (short ${a.discriminator shr 8}), vendor 0x%04X, product 0x%04X]"
+              .format(a.vendorId, a.productId)
+          } +
+          ", but none matches the setup code ($expected). Check the code on the sticker."
+    }
+  }
+
   private fun failCommission(code: String, message: String) {
+    main.removeCallbacks(onNetworkTimeout)
+    onNetworkFallbackMessage = null
     ble?.close()
     ble = null
     val r = pendingCommission ?: return
@@ -269,6 +338,8 @@ class MatterBridge(
         return
       }
       prefs.edit().putLong(KEY_NODE, nodeId).putString(KEY_LABEL, "Panasonic AC").apply()
+      main.removeCallbacks(onNetworkTimeout)
+      onNetworkFallbackMessage = null
       ble?.close()
       ble = null
       val r = pendingCommission ?: return
@@ -532,6 +603,7 @@ class MatterBridge(
     private const val KEY_LABEL = "label"
     private const val KEY_NEXT_NODE = "next_node_id"
     private const val SCAN_TIMEOUT_MS = 30_000L
+    private const val ON_NETWORK_TIMEOUT_MS = 120_000L
     private const val ATTESTATION_FAILSAFE_SECS = 600
     private const val SUB_MIN_INTERVAL_S = 0
     private const val SUB_MAX_INTERVAL_S = 60

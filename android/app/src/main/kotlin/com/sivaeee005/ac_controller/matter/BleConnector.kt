@@ -43,57 +43,96 @@ class BleConnector(private val context: Context, private val platform: AndroidCh
     return manager.adapter?.isEnabled == true
   }
 
-  /** Scans for up to [timeoutMs]; calls [onResult] once with the device or null. */
+  /** A Matter commissionable BLE advertisement (service 0xFFF6, opcode 0). */
+  data class MatterAdvert(val discriminator: Int, val vendorId: Int, val productId: Int)
+
+  /** What the scan saw, for diagnosis when the AC is not found. */
+  class ScanReport(
+    val device: BluetoothDevice?,
+    val devicesSeen: Int,
+    val matterAdverts: List<MatterAdvert>,
+    val scanError: Int?,
+  )
+
+  /**
+   * Scans for up to [timeoutMs] and matches the discriminator in software.
+   *
+   * No hardware ScanFilter is used: some phones (seen on Samsung) return no
+   * results at all for service-data filters with a mask.
+   */
   fun scan(
-    discriminator: Int,
+    longDiscriminator: Int,
     isShortDiscriminator: Boolean,
     timeoutMs: Long,
-    onResult: (BluetoothDevice?) -> Unit
+    onProgress: (devicesSeen: Int, matterSeen: Int) -> Unit,
+    onResult: (ScanReport) -> Unit
   ) {
     val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     val scanner = manager.adapter?.bluetoothLeScanner
     if (scanner == null) {
-      onResult(null)
+      onResult(ScanReport(null, 0, emptyList(), -1))
       return
     }
+    val seen = HashSet<String>()
+    val adverts = LinkedHashMap<String, MatterAdvert>()
     var done = false
+
+    fun finish(device: BluetoothDevice?, error: Int?) {
+      if (done) return
+      done = true
+      try {
+        scanner.stopScan(callbackHolder[0])
+      } catch (e: Exception) {
+        Log.w(TAG, "stopScan", e)
+      }
+      val report = ScanReport(device, seen.size, adverts.values.toList(), error)
+      main.post { onResult(report) }
+    }
+
     val callback =
       object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
           if (done) return
-          done = true
-          scanner.stopScan(this)
-          main.post { onResult(result.device) }
+          val address = result.device.address
+          val isNew = seen.add(address)
+          val data = result.scanRecord?.getServiceData(MATTER_SERVICE)
+          val advert = parseAdvert(data)
+          if (advert != null) adverts[address] = advert
+          if (isNew || advert != null) main.post { onProgress(seen.size, adverts.size) }
+          if (advert != null && matches(advert, longDiscriminator, isShortDiscriminator)) {
+            finish(result.device, null)
+          }
+        }
+
+        override fun onBatchScanResults(results: MutableList<ScanResult>) {
+          results.forEach { onScanResult(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, it) }
         }
 
         override fun onScanFailed(errorCode: Int) {
           Log.e(TAG, "BLE scan failed: $errorCode")
-          if (done) return
-          done = true
-          main.post { onResult(null) }
+          finish(null, errorCode)
         }
       }
-    val versionDiscriminator = discriminator and 0xfff
-    val serviceData =
-      byteArrayOf(0, versionDiscriminator.toByte(), (versionDiscriminator shr 8).toByte())
-    val mask = byteArrayOf(0xff.toByte(), if (isShortDiscriminator) 0x00 else 0xff.toByte(), 0xff.toByte())
-    val filter =
-      ScanFilter.Builder()
-        .setServiceData(ParcelUuid(UUID.fromString(MATTER_UUID)), serviceData, mask)
-        .build()
+    callbackHolder[0] = callback
     val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-    scanner.startScan(listOf(filter), settings, callback)
-    main.postDelayed(
-      {
-        if (!done) {
-          done = true
-          scanner.stopScan(callback)
-          onResult(null)
-        }
-      },
-      timeoutMs
-    )
+    scanner.startScan(emptyList<ScanFilter>(), settings, callback)
+    main.postDelayed({ finish(null, null) }, timeoutMs)
   }
+
+  private val callbackHolder = arrayOfNulls<ScanCallback>(1)
+
+  private fun parseAdvert(data: ByteArray?): MatterAdvert? {
+    // Matter BLE service data: opcode(1) | discriminator+version(2, LE) | VID(2) | PID(2) | ...
+    if (data == null || data.size < 3 || data[0].toInt() != 0) return null
+    val dv = (data[1].toInt() and 0xff) or ((data[2].toInt() and 0xff) shl 8)
+    val vid = if (data.size >= 5) (data[3].toInt() and 0xff) or ((data[4].toInt() and 0xff) shl 8) else -1
+    val pid = if (data.size >= 7) (data[5].toInt() and 0xff) or ((data[6].toInt() and 0xff) shl 8) else -1
+    return MatterAdvert(dv and 0xfff, vid, pid)
+  }
+
+  private fun matches(a: MatterAdvert, longDiscriminator: Int, isShort: Boolean): Boolean =
+    if (isShort) (a.discriminator shr 8) == (longDiscriminator shr 8)
+    else a.discriminator == longDiscriminator
 
   /** Connects, discovers services and sets the MTU; then calls [onReady] with the GATT. */
   fun connect(device: BluetoothDevice, onReady: (BluetoothGatt?) -> Unit) {
@@ -170,6 +209,6 @@ class BleConnector(private val context: Context, private val platform: AndroidCh
 
   companion object {
     private const val TAG = "BleConnector"
-    private const val MATTER_UUID = "0000FFF6-0000-1000-8000-00805F9B34FB"
+    private val MATTER_SERVICE = ParcelUuid(UUID.fromString("0000FFF6-0000-1000-8000-00805F9B34FB"))
   }
 }

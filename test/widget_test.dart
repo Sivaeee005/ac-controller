@@ -69,4 +69,14 @@ void main() {
     final field = tester.widget<TextField>(find.widgetWithText(TextField, 'Wi-Fi password'));
     expect(field.obscureText, isTrue);
   });
+
+  testWidgets('debug report opens from the app bar', (tester) async {
+    final c = AcController(SimulatedBackend(latency: Duration.zero));
+    await tester.runAsync(c.start);
+    await tester.pumpWidget(AcApp(controller: c));
+    await tester.tap(find.byTooltip('Debug report'));
+    await tester.pumpAndSettle();
+    expect(find.text('Debug report'), findsOneWidget);
+    expect(find.textContaining('Simulated build'), findsOneWidget);
+  });
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.sivaeee005.ac_controller.DebugReport
 import chip.devicecontroller.ChipDeviceController
 import chip.devicecontroller.CommissionParameters
 import chip.devicecontroller.ControllerParams
@@ -219,8 +220,10 @@ class MatterBridge(
           stage("Not found over Bluetooth. Searching for the AC on your Wi-Fi network…")
           val nodeId = prepareCommissioning()
           onNetworkFallbackMessage = bleSummary
-          controller.pairDeviceWithCode(nodeId, code.trim().replace(" ", ""), false, true, params)
-          main.postDelayed(onNetworkTimeout, ON_NETWORK_TIMEOUT_MS)
+          guarded("pairDeviceWithCode (on-network)") {
+            controller.pairDeviceWithCode(nodeId, code.trim().replace(" ", ""), false, true, params)
+            main.postDelayed(onNetworkTimeout, ON_NETWORK_TIMEOUT_MS)
+          }
           return@scan
         }
         stage("Connecting to the AC")
@@ -231,7 +234,9 @@ class MatterBridge(
           }
           stage("Sending Wi-Fi details and certificates")
           val nodeId = prepareCommissioning()
-          controller.pairDevice(gatt, connector.connectionId, nodeId, payload.setupPinCode, params)
+          guarded("pairDevice (BLE)") {
+            controller.pairDevice(gatt, connector.connectionId, nodeId, payload.setupPinCode, params)
+          }
         }
       }
     }
@@ -261,8 +266,14 @@ class MatterBridge(
     prefs.edit().putLong(KEY_NEXT_NODE, nodeId + 1).apply()
     controller.setCompletionListener(CommissionListener(nodeId))
     controller.setDeviceAttestationDelegate(ATTESTATION_FAILSAFE_SECS) { devicePtr, _, errorCode ->
+      DebugReport.log("attestation result: $errorCode")
       if (errorCode == 0L) {
-        controller.continueCommissioning(devicePtr, true)
+        try {
+          controller.continueCommissioning(devicePtr, true)
+        } catch (e: Throwable) {
+          DebugReport.log("ERROR continueCommissioning: ${Log.getStackTraceString(e)}")
+          failCommission("sdk_error", "Pairing stopped after the certificate check: ${e.message}")
+        }
       } else {
         // Let the user decide; see AttestationFailedEvent in Dart.
         attestationDevicePtr = devicePtr
@@ -272,7 +283,23 @@ class MatterBridge(
     return nodeId
   }
 
-  private fun stage(text: String) = emit(mapOf("type" to "stage", "stage" to text))
+  private fun stage(text: String) {
+    DebugReport.log("stage: $text")
+    emit(mapOf("type" to "stage", "stage" to text))
+  }
+
+  /**
+   * Runs an SDK call from a callback. The SDK throws ChipDeviceControllerException
+   * for errors; uncaught there, it would crash the app. Report it instead.
+   */
+  private inline fun guarded(what: String, block: () -> Unit) {
+    try {
+      block()
+    } catch (e: Throwable) {
+      DebugReport.log("ERROR in $what: ${e.javaClass.name}: ${e.message}\n${Log.getStackTraceString(e)}")
+      failCommission("sdk_error", "Pairing stopped: $what failed (${e.javaClass.simpleName}: ${e.message}).")
+    }
+  }
 
   /** Explains why the scan did not find the AC, from what it actually saw. */
   private fun notFoundMessage(
@@ -307,6 +334,7 @@ class MatterBridge(
   }
 
   private fun failCommission(code: String, message: String) {
+    DebugReport.log("pairing failed [$code]: $message")
     main.removeCallbacks(onNetworkTimeout)
     onNetworkFallbackMessage = null
     ble?.close()
@@ -323,12 +351,14 @@ class MatterBridge(
     override fun onStatusUpdate(status: Int) {}
 
     override fun onPairingComplete(errorCode: Long) {
+      DebugReport.log("onPairingComplete: $errorCode")
       if (errorCode != 0L) failCommission("pairing_failed", "Pairing failed (code $errorCode).")
     }
 
     override fun onPairingDeleted(errorCode: Long) {}
 
     override fun onCommissioningComplete(nodeId: Long, errorCode: Long) {
+      DebugReport.log("onCommissioningComplete: node=$nodeId error=$errorCode")
       if (errorCode != 0L) {
         failCommission(
           "commissioning_failed",
@@ -355,6 +385,7 @@ class MatterBridge(
     ) {}
 
     override fun onCommissioningStatusUpdate(nodeId: Long, stageName: String?, errorCode: Long) {
+      DebugReport.log("commissioning stage: $stageName error=$errorCode")
       if (stageName != null) stage("Step: $stageName")
     }
 
@@ -363,6 +394,7 @@ class MatterBridge(
     override fun onCloseBleComplete() {}
 
     override fun onError(error: Throwable?) {
+      DebugReport.log("commissioning onError: ${Log.getStackTraceString(error)}")
       failCommission("pairing_error", error?.message ?: "Unknown pairing error.")
     }
 
@@ -387,11 +419,18 @@ class MatterBridge(
         override fun onDeviceConnected(devicePointer: Long) {
           connectedPtr = devicePointer
           connectedNode = nodeId
-          subscribe(devicePointer)
+          DebugReport.log("connected to node $nodeId; subscribing")
+          try {
+            subscribe(devicePointer)
+          } catch (e: Throwable) {
+            DebugReport.log("ERROR subscribe: ${Log.getStackTraceString(e)}")
+            finishConnect("subscribe_failed", "Could not read the AC state: ${e.message}")
+          }
         }
 
         override fun onConnectionFailure(nodeId: Long, error: Exception) {
           Log.w(TAG, "connect failed", error)
+          DebugReport.log("connect failed: ${error.message}")
           finishConnect(
             "unreachable",
             "The AC could not be reached on your Wi-Fi. Check that the AC is powered and " +

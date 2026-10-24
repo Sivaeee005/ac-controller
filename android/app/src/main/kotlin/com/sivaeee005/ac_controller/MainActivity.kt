@@ -16,10 +16,40 @@ class MainActivity : FlutterActivity() {
 
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
+    DebugReport.install(applicationContext)
+    DebugReport.log("app started")
     val bridge = MatterBridge(applicationContext) { onResult -> requestBluetooth(onResult) }
     val messenger = flutterEngine.dartExecutor.binaryMessenger
     MethodChannel(messenger, "ac_controller/matter").setMethodCallHandler(bridge)
     EventChannel(messenger, "ac_controller/matter/events").setStreamHandler(bridge)
+    MethodChannel(messenger, "ac_controller/debug").setMethodCallHandler { call, result ->
+      when (call.method) {
+        "build" ->
+          Thread {
+              val report =
+                try {
+                  DebugReport.build(applicationContext)
+                } catch (e: Throwable) {
+                  "Could not build report: $e"
+                }
+              runOnUiThread { result.success(report) }
+            }
+            .start()
+        "share" -> {
+          try {
+            DebugReport.share(this, call.argument<String>("report") ?: "")
+            result.success(null)
+          } catch (e: Throwable) {
+            result.error("share_failed", e.message, null)
+          }
+        }
+        "clear" -> {
+          DebugReport.clear(applicationContext)
+          result.success(null)
+        }
+        else -> result.notImplemented()
+      }
+    }
   }
 
   private fun bluetoothPermissions(): Array<String> =

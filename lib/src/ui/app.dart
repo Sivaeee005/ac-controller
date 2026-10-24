@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../domain/ac_state.dart';
 import '../services/ac_controller.dart';
+import 'debug_report_page.dart';
 import 'device_page.dart';
 import 'pairing_page.dart';
 
@@ -20,7 +21,17 @@ class AcApp extends StatelessWidget {
       home: ListenableBuilder(
         listenable: controller,
         builder: (context, _) => Scaffold(
-          appBar: AppBar(title: const Text('AC Controller')),
+          appBar: AppBar(
+            title: const Text('AC Controller'),
+            actions: [
+              IconButton(
+                tooltip: 'Debug report',
+                icon: const Icon(Icons.bug_report_outlined),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => DebugReportPage(simulated: controller.isSimulated))),
+              ),
+            ],
+          ),
           body: Column(
             children: [
               if (controller.isSimulated) const SimulatedBanner(),

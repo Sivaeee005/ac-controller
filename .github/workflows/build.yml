@@ -1,0 +1,172 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Matter SDK release used for the Android controller libraries.
+  MATTER_SDK_REF: v1.4.2.0
+  # Pinned commit of connectedhomeip master for the latest public PAA root
+  # certificates (DCL mirror). Certificates only, no code from this commit.
+  PAA_CERTS_COMMIT: 3c19a5ce7df02388864205626dd11fb1e9745697
+  FLUTTER_VERSION: 3.47.6
+  FLUTTER_SHA256: f1631b9c2c8b3529323db412b0d1beacf4a748f8783b0d7cf599a8fd5f461675
+
+jobs:
+  matter-sdk:
+    name: Matter SDK Android libraries
+    runs-on: ubuntu-latest
+    container:
+      # Build image used by connectedhomeip's own Android CI at v1.4.2.0.
+      image: ghcr.io/project-chip/chip-build-android:140
+    steps:
+      - name: Restore cached libraries
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/matter-libs
+          key: matter-android-libs-${{ env.MATTER_SDK_REF }}-arm64-arm-r1
+
+      - name: Checkout connectedhomeip ${{ env.MATTER_SDK_REF }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: project-chip/connectedhomeip
+          ref: ${{ env.MATTER_SDK_REF }}
+          fetch-depth: 1
+
+      - name: Checkout submodules and bootstrap (official SDK action)
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/checkout-submodules-and-bootstrap
+        with:
+          platform: android
+
+      - name: Free disk space
+        if: steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: rm -rf .environment/cipd/packages/arm
+
+      - name: Build arm64-v8a
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          ./scripts/run_in_build_env.sh \
+            "./scripts/build/build_examples.py --target android-arm64-chip-tool build"
+          mkdir -p /tmp/matter-libs/jniLibs/arm64-v8a /tmp/matter-libs/jars
+          cp out/android-arm64-chip-tool/lib/jni/arm64-v8a/libCHIPController.so \
+             out/android-arm64-chip-tool/lib/jni/arm64-v8a/libc++_shared.so \
+             /tmp/matter-libs/jniLibs/arm64-v8a/
+          for j in src/controller/java/CHIPController.jar \
+                   src/controller/java/CHIPInteractionModel.jar \
+                   src/controller/java/OnboardingPayload.jar \
+                   src/platform/android/AndroidPlatform.jar \
+                   src/controller/java/libMatterJson.jar \
+                   src/controller/java/libMatterTlv.jar \
+                   src/controller/java/CHIPClusters.jar \
+                   src/controller/java/CHIPClusterID.jar; do
+            cp "out/android-arm64-chip-tool/lib/$j" /tmp/matter-libs/jars/
+          done
+          rm -rf out examples/android/CHIPTool/app/libs/jniLibs/* examples/android/CHIPTool/app/libs/*.jar
+
+      - name: Build armeabi-v7a
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          ./scripts/run_in_build_env.sh \
+            "./scripts/build/build_examples.py --target android-arm-chip-tool build"
+          mkdir -p /tmp/matter-libs/jniLibs/armeabi-v7a
+          cp out/android-arm-chip-tool/lib/jni/armeabi-v7a/libCHIPController.so \
+             out/android-arm-chip-tool/lib/jni/armeabi-v7a/libc++_shared.so \
+             /tmp/matter-libs/jniLibs/armeabi-v7a/
+          echo "${{ env.MATTER_SDK_REF }} $(git rev-parse HEAD)" > /tmp/matter-libs/SOURCE.txt
+          find /tmp/matter-libs -type f -exec sha256sum {} \; | tee /tmp/matter-libs/SHA256SUMS.txt
+
+      - name: Save cached libraries
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/matter-libs
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Upload libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: matter-libs
+          path: /tmp/matter-libs
+          retention-days: 7
+
+  app:
+    name: Test and build APKs
+    needs: matter-sdk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        run: |
+          curl -sSLo /tmp/flutter.tar.xz \
+            "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz"
+          echo "${FLUTTER_SHA256}  /tmp/flutter.tar.xz" | sha256sum -c -
+          tar -xf /tmp/flutter.tar.xz -C "$HOME"
+          echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Flutter analyze and tests (simulated AC)
+        run: |
+          flutter --disable-analytics
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      - name: Download Matter SDK libraries
+        uses: actions/download-artifact@v4
+        with:
+          name: matter-libs
+          path: /tmp/matter-libs
+
+      - name: Add Matter libraries and PAA certificates
+        run: |
+          mkdir -p android/app/libs/jniLibs
+          cp /tmp/matter-libs/jars/*.jar android/app/libs/
+          cp -r /tmp/matter-libs/jniLibs/* android/app/libs/jniLibs/
+          git init -q /tmp/chip && cd /tmp/chip
+          git remote add origin https://github.com/project-chip/connectedhomeip
+          git sparse-checkout set credentials/production/paa-root-certs
+          git fetch -q --depth 1 --filter=blob:none origin "$PAA_CERTS_COMMIT"
+          git checkout -q FETCH_HEAD
+          mkdir -p "$GITHUB_WORKSPACE/android/app/build-assets/paa"
+          cp credentials/production/paa-root-certs/*.der "$GITHUB_WORKSPACE/android/app/build-assets/paa/"
+          ls "$GITHUB_WORKSPACE/android/app/build-assets/paa" | wc -l
+
+      - name: Build APKs
+        run: |
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk ac-controller-matter.apk
+          flutter build apk --release --dart-define=SIMULATED=true
+          cp build/app/outputs/flutter-apk/app-release.apk ac-controller-SIMULATED.apk
+
+      - name: Check APK contents
+        run: |
+          for abi in arm64-v8a armeabi-v7a; do
+            unzip -l ac-controller-matter.apk | grep -q "lib/$abi/libCHIPController.so" \
+              || { echo "Missing libCHIPController.so for $abi"; exit 1; }
+          done
+          unzip -l ac-controller-matter.apk | grep -c "assets/paa/.*\.der" \
+            | awk '{ if ($1 < 50) { print "Too few PAA certificates: " $1; exit 1 } else print $1 " PAA certificates" }'
+          sha256sum ac-controller-*.apk | tee SHA256SUMS.txt
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ac-controller-apks
+          path: |
+            ac-controller-matter.apk
+            ac-controller-SIMULATED.apk
+            SHA256SUMS.txt
+          retention-days: 30

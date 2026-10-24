@@ -179,6 +179,14 @@ class MatterBridge(
       result.error("no_wifi", "Enter the name of your 2.4 GHz Wi-Fi network.", null)
       return
     }
+    // Start the Matter stack now, so a stack problem is reported before scanning.
+    try {
+      controller
+    } catch (e: Throwable) {
+      DebugReport.log("ERROR starting Matter controller: ${Log.getStackTraceString(e)}")
+      result.error("matter_init", "The Matter system in this app could not start: ${e.message}", null)
+      return
+    }
     permissions.requestBluetooth { granted ->
       if (!granted) {
         result.error("permission", "Bluetooth permission is needed to pair the AC.", null)
@@ -218,9 +226,9 @@ class MatterBridge(
           ble = null
           val bleSummary = notFoundMessage(report, discriminator, payload.hasShortDiscriminator)
           stage("Not found over Bluetooth. Searching for the AC on your Wi-Fi network…")
-          val nodeId = prepareCommissioning()
           onNetworkFallbackMessage = bleSummary
           guarded("pairDeviceWithCode (on-network)") {
+            val nodeId = prepareCommissioning()
             controller.pairDeviceWithCode(nodeId, code.trim().replace(" ", ""), false, true, params)
             main.postDelayed(onNetworkTimeout, ON_NETWORK_TIMEOUT_MS)
           }
@@ -233,8 +241,8 @@ class MatterBridge(
             return@connect
           }
           stage("Sending Wi-Fi details and certificates")
-          val nodeId = prepareCommissioning()
           guarded("pairDevice (BLE)") {
+            val nodeId = prepareCommissioning()
             controller.pairDevice(gatt, connector.connectionId, nodeId, payload.setupPinCode, params)
           }
         }

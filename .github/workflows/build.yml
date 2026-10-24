@@ -29,7 +29,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /tmp/matter-libs
-          key: matter-android-libs-${{ env.MATTER_SDK_REF }}-arm64-arm-r1
+          key: matter-android-libs-${{ env.MATTER_SDK_REF }}-arm64-arm-nonfc-r2
 
       - name: Checkout connectedhomeip ${{ env.MATTER_SDK_REF }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -49,6 +49,19 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         continue-on-error: true
         run: rm -rf .environment/cipd/packages/arm
+
+      # The chip-tool Android target enables NFC-based commissioning, but the
+      # Java AndroidChipPlatform never registers an NFC manager, so
+      # InitChipStack() fails (NFCCommissioningManagerImpl.cpp:91) and every
+      # controller call then fails with "Incorrect state". Seen on a Galaxy
+      # Tab S9 (no NFC). This app does not use NFC: build without it.
+      - name: Disable NFC-based commissioning in the SDK build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sed -i 's/gn_args\["chip_enable_nfc_based_commissioning"\] = True/gn_args["chip_enable_nfc_based_commissioning"] = False/' \
+            scripts/build/builders/android.py
+          grep -n 'chip_enable_nfc_based_commissioning' scripts/build/builders/android.py
+          ! grep -q 'chip_enable_nfc_based_commissioning"\] = True' scripts/build/builders/android.py
 
       - name: Build arm64-v8a
         if: steps.cache.outputs.cache-hit != 'true'

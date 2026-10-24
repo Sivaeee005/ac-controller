@@ -43,11 +43,13 @@ for Wi-Fi details before sharing it.
 |---|---|---|---|---|
 | 2026-10-24 | run 40095973855 | 1 Pairing | **Fail** | "AC was not found over Bluetooth". Cause found in the app: the BLE scan used the short discriminator from the manual code without converting it to the 12-bit form, so it could never match. Fixed in the next build; the AC must also be in setup mode (SMART button, 5 s). |
 | 2026-10-24 | run 40099643391 | 1 Pairing | **Fail** | Same message. The AC display showed "SE" + blinking Wi-Fi (setup mode confirmed). REA/JADX check of MirAIe: in "SE" mode MirAIe scans for Panasonic's proprietary BLE advert (manufacturer data), then commissions Matter **on-network** (`pairDeviceWithCode(..., useOnlyOnNetworkDiscovery = true)`). Next build: BLE scan without hardware filter plus diagnostics, then on-network Matter pairing as a fallback. |
+| 2026-10-24 | run 40117140031 | 1 Pairing | **Fail (crash)** | Debug report (Galaxy Tab S9 SM-X710, Android 16): BLE saw 3 devices, 0 Matter adverts. Crash creating the controller: `SystemLayerImplSelect.cpp:57 Incorrect state`, caused by `NFCCommissioningManagerImpl.cpp:91` failing during InitChipStack (the SDK chip-tool build enables NFC commissioning but Java never registers an NFC manager). Next build: SDK built without NFC commissioning; controller creation moved inside error handling. |
 
 ## Stage 1 — simulated results
 
-Run in CI on every push (`flutter test`): 27 tests covering confirmed
+Run in CI on every push (`flutter test`): 28 tests covering confirmed
 commands, "not confirmed" when no report arrives, failure and retry,
 not-connected errors, unsupported modes, temperature limits, IR-remote
 changes, ordered commands, reconnect with capped backoff, pairing progress,
-removal, password field hiding, and "Not reported" for missing values.
+removal, password field hiding, the debug report screen, and "Not reported"
+for missing values.
